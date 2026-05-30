@@ -1,0 +1,33 @@
+{
+  "instagram": {
+    "username": "gecko.95710620",
+    "password_env": "IG_PASSWORD",
+    "password": "",
+    "session_file": "session.json"
+  },
+  "video": {
+    "path": "./video_reel.mp4",
+    "format": "mp4"
+  },
+  "posting": {
+    "posts_per_day": 50,
+    "hashtags": "#yumor",
+    "caption_template": "{number}-reels {hashtags}",
+    "start_time": "00:00",
+    "end_time": "23:59"
+  },
+  "schedule": {
+    "enabled": true,
+    "auto_restart_daily": true,
+    "timezone": "Asia/Tashkent"
+  },
+  "browser": {
+    "profile_dir": "chrome_profile",
+    "debug_dir": "debug"
+  },
+  "logging": {
+    "log_file": "instagram_poster.log",
+    "json_log": "posts_log.json",
+    "verbose": true
+  }
+}

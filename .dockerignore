@@ -1,0 +1,13 @@
+venv
+__pycache__
+*.pyc
+.DS_Store
+instagram_poster.log
+posts_log.json
+telegram_bot_state.json
+debug
+chrome_profile
+*.mp4
+!video_reel.mp4
+*.mov
+*.zip

@@ -1,0 +1,15 @@
+[Unit]
+Description=Instagram Telegram Automation Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/instagram-automation
+Environment=DISPLAY=:99
+Environment=TELEGRAM_BOT_TOKEN=PUT_TOKEN_HERE
+ExecStart=/opt/instagram-automation/venv/bin/python /opt/instagram-automation/telegram_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
