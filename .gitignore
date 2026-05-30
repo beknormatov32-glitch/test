@@ -16,6 +16,8 @@ session.json
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
+streamlit_process.log
 
 # OS/editor
 .DS_Store
