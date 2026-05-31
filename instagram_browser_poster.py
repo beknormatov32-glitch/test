@@ -275,6 +275,9 @@ class InstagramBrowserPoster:
         number = int(post_number) if str(post_number).isdigit() else post_number
         filename = self.config.image_template.format(number=number)
         path = self.config.image_dir / filename
+        if path.exists() and path.stat().st_size < 1024:
+            logger.info("Generated image is too small (%s bytes), regenerating: %s", path.stat().st_size, path)
+            path.unlink(missing_ok=True)
         if not path.exists():
             self.generate_text_post_image(path, post_number)
         return path
@@ -296,8 +299,8 @@ class InstagramBrowserPoster:
         x = (width - text_width) / 2
         y = (height - text_height) / 2 - 20
         draw.text((x, y), text, font=font, fill=self.config.image_fg)
-        image.save(path, "PNG")
-        logger.info("Generated image post: %s", path)
+        image.save(path, "PNG", compress_level=0)
+        logger.info("Generated image post: %s (%s bytes)", path, path.stat().st_size)
 
     def load_font(self, size: int):
         candidates = [
