@@ -6,7 +6,7 @@
     "session_file": "session.json"
   },
   "video": {
-    "path": "./video_reel.mp4",
+    "path": "./video_reel1.mp4",
     "format": "mp4"
   },
   "posting": {

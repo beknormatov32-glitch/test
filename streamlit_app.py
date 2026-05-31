@@ -35,18 +35,19 @@ def start_process(args: list[str]) -> None:
         st.warning("Oldingi jarayon hali ishlayapti. Avval Stop bosing.")
         return
 
-    command = [sys.executable, str(POSTER), *args]
+    command = [sys.executable, "-u", str(POSTER), *args]
     if os.getenv("POSTER_HEADLESS", "").lower() in {"1", "true", "yes"} and "--headless" not in command:
         command.append("--headless")
 
     log_path = BASE_DIR / "streamlit_process.log"
-    log_file = log_path.open("a", encoding="utf-8")
+    log_file = log_path.open("a", encoding="utf-8", buffering=1)
     process = subprocess.Popen(
         command,
         cwd=str(BASE_DIR),
         stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
         start_new_session=True,
     )
     st.session_state["process"] = process
@@ -75,6 +76,11 @@ def tail_file(path: Path, lines: int = 80) -> str:
     return "\n".join(content[-lines:]) or "Fayl bo'sh."
 
 
+def show_tail(path: Path, lines: int = 100, language: str = "text") -> None:
+    st.code(tail_file(path, lines), language=language)
+    st.caption("Eng oxirgi qatorlar pastda turadi. Yangilash uchun Refresh logs bosing.")
+
+
 def main() -> None:
     st.set_page_config(page_title="Instagram Automation", page_icon="IG", layout="wide")
     init_state()
@@ -96,9 +102,10 @@ def main() -> None:
 
     with tab_once:
         number = st.number_input("Reel number", min_value=1, max_value=999, value=1, step=1)
+        action_delay_once = st.number_input("Action delay", min_value=0.0, max_value=5.0, value=0.7, step=0.1, key="once_action_delay")
         manual = st.checkbox("Manual Share", value=False, key="once_manual")
         if st.button("Upload once", type="primary"):
-            args = ["--once", str(number)]
+            args = ["--once", str(number), "--action-delay", str(action_delay_once)]
             if manual:
                 args.append("--manual-share")
             start_process(args)
@@ -107,6 +114,7 @@ def main() -> None:
         start_number = st.number_input("Start number", min_value=1, max_value=999, value=1, step=1)
         count = st.number_input("Count", min_value=1, max_value=999, value=10, step=1)
         delay = st.number_input("Delay seconds", min_value=0, max_value=3600, value=5, step=1)
+        action_delay_batch = st.number_input("Action delay", min_value=0.0, max_value=5.0, value=0.7, step=0.1, key="batch_action_delay")
         manual_batch = st.checkbox("Manual Share", value=False, key="batch_manual")
         if st.button("Start batch", type="primary"):
             args = [
@@ -117,6 +125,8 @@ def main() -> None:
                 str(count),
                 "--delay-seconds",
                 str(delay),
+                "--action-delay",
+                str(action_delay_batch),
             ]
             if manual_batch:
                 args.append("--manual-share")
@@ -124,8 +134,9 @@ def main() -> None:
 
     with tab_auto:
         interval = st.number_input("Interval minutes", min_value=1, max_value=1440, value=29, step=1)
+        action_delay_auto = st.number_input("Action delay", min_value=0.0, max_value=5.0, value=0.7, step=0.1, key="auto_action_delay")
         if st.button("Start auto interval", type="primary"):
-            start_process(["--start-now", "--interval-minutes", str(interval)])
+            start_process(["--start-now", "--interval-minutes", str(interval), "--action-delay", str(action_delay_auto)])
         if st.button("Stop", type="secondary"):
             stop_process()
 
@@ -140,14 +151,14 @@ def main() -> None:
             st.rerun()
 
         st.subheader("instagram_poster.log")
-        st.code(tail_file(LOG_FILE, 100), language="text")
+        show_tail(LOG_FILE, 100, "text")
 
         st.subheader("posts_log.json")
-        st.code(tail_file(JSON_LOG, 60), language="json")
+        show_tail(JSON_LOG, 60, "json")
 
         process_log = BASE_DIR / "streamlit_process.log"
         st.subheader("streamlit_process.log")
-        st.code(tail_file(process_log, 100), language="text")
+        show_tail(process_log, 100, "text")
 
 
 if __name__ == "__main__":

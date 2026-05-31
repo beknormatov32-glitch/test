@@ -90,7 +90,7 @@ def read_config(config_path: Path, dry_run: bool = False) -> PosterConfig:
     return PosterConfig(
         username=instagram.get("username", "").strip(),
         password=password,
-        video_path=resolve_path(video.get("path", "./video_reel.mp4"), config_path.parent),
+        video_path=resolve_path(video.get("path", "./video_reel1.mp4"), config_path.parent),
         hashtags=posting.get("hashtags", "").strip(),
         caption_template=posting.get("caption_template", "{number}-reels\n{hashtags}"),
         posts_per_day=int(posting.get("posts_per_day", 1)),

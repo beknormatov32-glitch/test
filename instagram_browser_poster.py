@@ -54,6 +54,7 @@ class BrowserConfig:
     json_log: Path
     profile_dir: Path
     debug_dir: Path
+    action_delay: float
     verbose: bool
 
 
@@ -100,7 +101,7 @@ def read_config(config_path: Path) -> BrowserConfig:
 
     return BrowserConfig(
         username=instagram.get("username", "").strip(),
-        video_path=resolve_path(video.get("path", "./video_reel.mp4"), config_path.parent),
+        video_path=resolve_path(video.get("path", "./video_reel1.mp4"), config_path.parent),
         hashtags=posting.get("hashtags", "#yumor").strip(),
         caption_template=posting.get("caption_template", "{number}-reels {hashtags}"),
         posts_per_day=int(posting.get("posts_per_day", 50)),
@@ -111,6 +112,7 @@ def read_config(config_path: Path) -> BrowserConfig:
         json_log=resolve_path(os.getenv("INSTAGRAM_JSON_LOG") or logging_cfg.get("json_log", "posts_log.json"), config_path.parent),
         profile_dir=resolve_path(os.getenv("BROWSER_PROFILE_DIR") or browser_cfg.get("profile_dir", "chrome_profile"), config_path.parent),
         debug_dir=resolve_path(os.getenv("BROWSER_DEBUG_DIR") or browser_cfg.get("debug_dir", "debug"), config_path.parent),
+        action_delay=float(os.getenv("BROWSER_ACTION_DELAY") or browser_cfg.get("action_delay", 0.7)),
         verbose=bool(logging_cfg.get("verbose", True)),
     )
 
@@ -128,6 +130,11 @@ class InstagramBrowserPoster:
         self.page = None
         self.scheduler = BackgroundScheduler(timezone=config.timezone)
         self.posts_today = 0
+
+    def pause(self, multiplier: float = 1.0) -> None:
+        delay = max(0.0, self.config.action_delay * multiplier)
+        if delay:
+            time.sleep(delay)
 
     def validate(self) -> None:
         if not self.config.username:
@@ -312,7 +319,7 @@ class InstagramBrowserPoster:
             timeout=60000,
         ):
             raise RuntimeError("Next button not found")
-        time.sleep(2)
+        self.pause(1.0)
 
     def set_video_file(self) -> None:
         logger.info("Looking for upload input or Create menu...")
@@ -348,7 +355,7 @@ class InstagramBrowserPoster:
         for label in labels:
             if self.click_menu_text(label):
                 logger.info("Clicked Create menu item by text: %s", label)
-                time.sleep(1)
+                self.pause(0.5)
                 return True
         logger.info("Create menu item not visible; continuing.")
         return False
@@ -436,22 +443,85 @@ class InstagramBrowserPoster:
 
     def fill_caption(self, caption: str) -> None:
         selectors = [
-            "div[aria-label='Write a caption...']",
-            "div[aria-label='Напишите подпись...']",
-            "div[aria-label='Добавьте подпись...']",
+            "div[aria-label='Write a caption...'][contenteditable='true']",
+            "div[aria-label='Напишите подпись...'][contenteditable='true']",
+            "div[aria-label='Добавьте подпись...'][contenteditable='true']",
+            "[role='textbox'][contenteditable='true']",
             "textarea",
             "div[contenteditable='true']",
         ]
         for selector in selectors:
             try:
-                field = self.page.locator(selector).first
+                field = self.page.locator(selector).last
                 field.wait_for(state="visible", timeout=10000)
-                field.click()
-                field.fill(caption)
-                return
+                if self.type_caption(field, caption):
+                    logger.info("Caption filled: %s", caption)
+                    return
             except Exception:
                 continue
         raise RuntimeError("Caption field not found")
+
+    def type_caption(self, field, caption: str) -> bool:
+        try:
+            field.scroll_into_view_if_needed(timeout=5000)
+        except Exception:
+            pass
+
+        field.click(timeout=5000, force=True)
+        self.pause(0.25)
+
+        # Instagram's caption box is a React contenteditable. Keyboard input is
+        # more reliable than Locator.fill() for preserving the final caption.
+        try:
+            field.fill("")
+        except Exception:
+            pass
+
+        for shortcut in ("Meta+A", "Control+A"):
+            try:
+                self.page.keyboard.press(shortcut)
+            except Exception:
+                pass
+        self.page.keyboard.press("Backspace")
+        self.page.keyboard.insert_text(caption)
+        self.pause(0.5)
+
+        if self.caption_field_has_text(field, caption):
+            return True
+
+        try:
+            field.evaluate(
+                """(el, value) => {
+                    el.focus();
+                    if ('value' in el) {
+                        el.value = value;
+                    } else {
+                        el.textContent = value;
+                    }
+                    el.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
+                        inputType: 'insertText',
+                        data: value
+                    }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                caption,
+            )
+            self.pause(0.5)
+        except Exception:
+            return False
+
+        return self.caption_field_has_text(field, caption)
+
+    def caption_field_has_text(self, field, caption: str) -> bool:
+        try:
+            value = field.input_value(timeout=1000)
+        except Exception:
+            try:
+                value = field.inner_text(timeout=1000)
+            except Exception:
+                value = ""
+        return caption in value
 
     def click_share(self) -> bool:
         share_texts = ["Share", "Поделиться", "Опубликовать"]
@@ -530,11 +600,11 @@ class InstagramBrowserPoster:
         logger.info("Looking for Done button...")
         if self.click_done():
             logger.info("Done clicked.")
-            time.sleep(2)
+            self.pause(1.0)
             return
         logger.warning("Done button not found; trying Escape.")
         self.page.keyboard.press("Escape")
-        time.sleep(2)
+        self.pause(1.0)
 
     def click_done(self) -> bool:
         done_texts = ["Done", "Готово"]
@@ -656,7 +726,7 @@ class InstagramBrowserPoster:
             self.scheduler.start()
             logger.info("Browser scheduler started. Keep Chrome and terminal open. Ctrl+C stops it.")
             while True:
-                time.sleep(1)
+                self.pause(1.0)
         except KeyboardInterrupt:
             logger.info("Stopped by user.")
             self.scheduler.shutdown(wait=False)
@@ -675,7 +745,7 @@ class InstagramBrowserPoster:
             self.scheduler.start()
             logger.info("Auto interval scheduler started. Keep Chrome and terminal open. Ctrl+C stops it.")
             while True:
-                time.sleep(1)
+                self.pause(1.0)
         except KeyboardInterrupt:
             logger.info("Stopped by user.")
             self.scheduler.shutdown(wait=False)
@@ -721,6 +791,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-seconds", type=int, default=5, help="Delay between reels in --batch-now mode")
     parser.add_argument("--manual-share", action="store_true", help="Prepare upload and caption, but let you click Share manually")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless after session exists")
+    parser.add_argument("--action-delay", type=float, help="Small delay between browser actions. Lower is faster, higher is safer.")
     return parser
 
 
@@ -728,6 +799,8 @@ def main() -> int:
     args = build_parser().parse_args()
     config_path = resolve_path(args.config, Path.cwd())
     config = read_config(config_path)
+    if args.action_delay is not None:
+        config.action_delay = args.action_delay
     setup_logging(config.log_file, config.verbose)
     poster = InstagramBrowserPoster(config, headless=args.headless)
 
