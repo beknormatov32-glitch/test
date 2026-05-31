@@ -945,6 +945,35 @@ class InstagramBrowserPoster:
         finally:
             self.close_browser()
 
+    def run_forever(
+        self,
+        start_number: int = 1,
+        delay_seconds: int = 0,
+        retry_delay_seconds: int = 60,
+        auto_share: bool = True,
+    ) -> bool:
+        self.validate()
+        self.start_browser()
+        try:
+            self.ensure_login()
+            number = start_number
+            logger.info("Forever mode started from post %s. Ctrl+C or /stop stops it.", start_number)
+            while True:
+                ok = self.upload_reel(number, auto_share=auto_share)
+                if ok:
+                    number += 1
+                    if delay_seconds > 0:
+                        logger.info("Waiting %s seconds before next post...", delay_seconds)
+                        time.sleep(delay_seconds)
+                    continue
+                logger.error("Post %s failed. Retrying same number in %s seconds.", number, retry_delay_seconds)
+                time.sleep(retry_delay_seconds)
+        except KeyboardInterrupt:
+            logger.info("Stopped by user.")
+            return True
+        finally:
+            self.close_browser()
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Browser-assisted Instagram Reels poster")
@@ -954,9 +983,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-now", action="store_true", help="Upload now, then continue every --interval-minutes")
     parser.add_argument("--interval-minutes", type=int, default=29, help="Interval for --start-now mode")
     parser.add_argument("--batch-now", action="store_true", help="Upload multiple reels one after another without the 29 minute interval")
+    parser.add_argument("--forever", action="store_true", help="Upload posts forever, incrementing numbers until stopped")
     parser.add_argument("--start-number", type=int, default=1, help="First reel number for --batch-now")
     parser.add_argument("--count", type=int, help="How many reels to upload in --batch-now mode")
     parser.add_argument("--delay-seconds", type=int, default=5, help="Delay between reels in --batch-now mode")
+    parser.add_argument("--retry-delay-seconds", type=int, default=60, help="Delay before retrying a failed post in --forever mode")
     parser.add_argument("--manual-share", action="store_true", help="Prepare upload and caption, but let you click Share manually")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless after session exists")
     parser.add_argument("--action-delay", type=float, help="Small delay between browser actions. Lower is faster, higher is safer.")
@@ -988,6 +1019,13 @@ def main() -> int:
                 poster.close_browser()
         if args.start_now:
             return 0 if poster.run_interval(interval_minutes=args.interval_minutes, start_now=True, auto_share=not args.manual_share) else 1
+        if args.forever:
+            return 0 if poster.run_forever(
+                start_number=args.start_number,
+                delay_seconds=args.delay_seconds,
+                retry_delay_seconds=args.retry_delay_seconds,
+                auto_share=not args.manual_share,
+            ) else 1
         if args.batch_now:
             return 0 if poster.run_batch(start_number=args.start_number, count=args.count, delay_seconds=args.delay_seconds, auto_share=not args.manual_share) else 1
         return 0 if poster.run(auto_share=not args.manual_share) else 1

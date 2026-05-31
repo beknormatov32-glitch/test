@@ -121,6 +121,39 @@ class TelegramPosterBot:
                 count = int(parts[2]) if len(parts) > 2 else 50
                 delay = int(parts[3]) if len(parts) > 3 else 5
                 self.start_process(chat_id, ["--batch-now", "--start-number", str(start), "--count", str(count), "--delay-seconds", str(delay)])
+            elif command == "/forever":
+                start = int(parts[1]) if len(parts) > 1 else 120
+                delay = int(parts[2]) if len(parts) > 2 else 0
+                retry_delay = int(parts[3]) if len(parts) > 3 else 60
+                self.start_process(
+                    chat_id,
+                    [
+                        "--forever",
+                        "--start-number",
+                        str(start),
+                        "--delay-seconds",
+                        str(delay),
+                        "--retry-delay-seconds",
+                        str(retry_delay),
+                        "--action-delay",
+                        "0.1",
+                    ],
+                )
+            elif command == "/auto120":
+                self.start_process(
+                    chat_id,
+                    [
+                        "--forever",
+                        "--start-number",
+                        "120",
+                        "--delay-seconds",
+                        "0",
+                        "--retry-delay-seconds",
+                        "60",
+                        "--action-delay",
+                        "0.1",
+                    ],
+                )
             elif command == "/auto":
                 interval = int(parts[1]) if len(parts) > 1 else 29
                 self.start_process(chat_id, ["--start-now", "--interval-minutes", str(interval)])
@@ -138,6 +171,9 @@ class TelegramPosterBot:
             "/once 4 - bitta reel chiqarish\n"
             "/batch 4 47 - 4 dan boshlab 47 ta reel chiqarish\n"
             "/batch 4 47 10 - 10 sekund delay bilan batch\n"
+            "/forever 120 - 120dan boshlab to'xtamasdan chiqarish\n"
+            "/forever 120 1 - 1 sekund delay bilan to'xtamasdan chiqarish\n"
+            "/auto120 - 120dan boshlab maksimal tezlikda to'xtamasdan\n"
             "/auto - hozir boshlash, keyin har 29 minut\n"
             "/auto 15 - hozir boshlash, keyin har 15 minut\n"
             "/stop - jarayonni to'xtatish\n"
