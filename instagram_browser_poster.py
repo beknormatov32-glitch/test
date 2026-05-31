@@ -401,19 +401,60 @@ class InstagramBrowserPoster:
         return self.upload_reel(self.posts_today + 1, auto_share=auto_share)
 
     def click_next(self) -> None:
-        if not self.click_first(
-            [
-                "div[role='button']:has-text('Next')",
-                "button:has-text('Next')",
-                "div[role='button']:has-text('Далее')",
-                "button:has-text('Далее')",
-                "div[role='button']:has-text('Дальше')",
-                "button:has-text('Дальше')",
-            ],
-            timeout=60000,
-        ):
+        if not self.click_text_button(["Next", "Далее", "Дальше"], timeout_ms=15000):
             raise RuntimeError("Next button not found")
-        self.pause(1.0)
+        self.pause(0.6)
+
+    def click_text_button(self, labels: List[str], timeout_ms: int = 5000) -> bool:
+        deadline = time.monotonic() + timeout_ms / 1000
+        while time.monotonic() < deadline:
+            for label in labels:
+                if self.click_text_button_once(label):
+                    return True
+            self.pause(0.2)
+        return False
+
+    def click_text_button_once(self, label: str) -> bool:
+        selectors = [
+            f"div[role='button']:has-text('{label}')",
+            f"button:has-text('{label}')",
+            f"a[role='link']:has-text('{label}')",
+            f"span:has-text('{label}')",
+            f"text='{label}'",
+        ]
+        for selector in selectors:
+            try:
+                button = self.page.locator(selector).last
+                if not button.is_visible(timeout=250):
+                    continue
+                box = button.bounding_box()
+                if box:
+                    self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    logger.info("Clicked %s by text button coordinates", label)
+                    return True
+                button.click(timeout=1000, force=True)
+                logger.info("Clicked %s by text button selector", label)
+                return True
+            except Exception:
+                continue
+        try:
+            clicked = self.page.evaluate(
+                """(label) => {
+                    const nodes = [...document.querySelectorAll('div[role="button"], button, a, span')];
+                    const node = nodes.reverse().find((el) => el.textContent && el.textContent.trim() === label);
+                    if (!node) return false;
+                    const clickable = node.closest('div[role="button"], button, a') || node;
+                    clickable.click();
+                    return true;
+                }""",
+                label,
+            )
+            if clicked:
+                logger.info("Clicked %s by JS text fallback", label)
+                return True
+        except Exception:
+            pass
+        return False
 
     def set_media_file(self, media_path: Path) -> None:
         logger.info("Looking for upload input or Create menu...")
