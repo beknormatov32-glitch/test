@@ -721,10 +721,29 @@ class InstagramBrowserPoster:
     def click_done(self) -> bool:
         done_texts = ["Done", "Готово"]
         for text in done_texts:
+            try:
+                button = self.page.get_by_text(text, exact=True).last
+                button.wait_for(state="visible", timeout=5000)
+                box = button.bounding_box()
+                if box:
+                    self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    logger.info("Clicked %s by text coordinates", text)
+                    return True
+                button.click(timeout=5000, force=True)
+                logger.info("Clicked %s by exact text", text)
+                return True
+            except Exception:
+                continue
+        for text in done_texts:
             xpath = f"xpath=//*[normalize-space()='{text}' and (self::div or self::button or self::span or self::a)]"
             try:
                 button = self.page.locator(xpath).last
                 button.wait_for(state="visible", timeout=10000)
+                box = button.bounding_box()
+                if box:
+                    self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    logger.info("Clicked %s by selector coordinates", text)
+                    return True
                 button.click(timeout=5000, force=True)
                 logger.info("Clicked %s by forced role/text selector", text)
                 return True
@@ -748,6 +767,8 @@ class InstagramBrowserPoster:
                     return True
             except Exception:
                 continue
+        if self.click_done_by_dialog_position():
+            return True
         return self.click_first(
             [
                 "div[role='button']:has-text('Done')",
@@ -757,6 +778,33 @@ class InstagramBrowserPoster:
             ],
             timeout=10000,
         )
+
+    def click_done_by_dialog_position(self) -> bool:
+        try:
+            box = self.page.evaluate(
+                """() => {
+                    const labels = [
+                        'Your post has been shared.',
+                        'Your reel has been shared.',
+                        'Post shared',
+                        'Reel shared'
+                    ];
+                    const nodes = [...document.querySelectorAll('div, span')];
+                    const marker = nodes.find((el) => labels.some((label) => el.textContent && el.textContent.trim() === label));
+                    const dialog = marker ? marker.closest('[role="dialog"]') : document.querySelector('[role="dialog"]');
+                    const target = dialog || marker;
+                    if (!target) return null;
+                    const rect = target.getBoundingClientRect();
+                    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+                }"""
+            )
+            if not box:
+                return False
+            self.page.mouse.click(box["x"] + box["width"] - 45, box["y"] + 30)
+            logger.info("Clicked Done by dialog top-right coordinates")
+            return True
+        except Exception:
+            return False
 
     def log_post(self, post_number: Union[int, str], caption: str, status: str) -> None:
         entry = {
