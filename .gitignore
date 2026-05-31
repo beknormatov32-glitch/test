@@ -13,6 +13,7 @@ telegram_bot_state.json
 session.json
 storage_state.json
 profile_upload.zip
+generated_posts/
 
 # Local env/secrets
 .env

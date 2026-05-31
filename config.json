@@ -9,6 +9,14 @@
     "path": "./video_reel1.mp4",
     "format": "mp4"
   },
+  "image_posts": {
+    "enabled": false,
+    "dir": "generated_posts",
+    "template": "post_{number:03d}.png",
+    "text_template": "{number} post",
+    "background": "#000000",
+    "foreground": "#ffffff"
+  },
   "posting": {
     "posts_per_day": 50,
     "hashtags": "#yumor",

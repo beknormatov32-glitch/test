@@ -21,6 +21,13 @@ from typing import Any, List, Optional, Union
 from apscheduler.schedulers.background import BackgroundScheduler
 
 try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+
+try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 except ImportError:
@@ -44,6 +51,12 @@ logger = logging.getLogger("instagram_browser_poster")
 class BrowserConfig:
     username: str
     video_path: Path
+    image_posts_enabled: bool
+    image_dir: Path
+    image_template: str
+    image_text_template: str
+    image_bg: str
+    image_fg: str
     hashtags: str
     caption_template: str
     posts_per_day: int
@@ -96,6 +109,7 @@ def read_config(config_path: Path) -> BrowserConfig:
     instagram = raw.get("instagram", {})
     posting = raw.get("posting", {})
     video = raw.get("video", {})
+    image_posts = raw.get("image_posts", {})
     schedule = raw.get("schedule", {})
     logging_cfg = raw.get("logging", {})
     browser_cfg = raw.get("browser", {})
@@ -103,6 +117,12 @@ def read_config(config_path: Path) -> BrowserConfig:
     return BrowserConfig(
         username=instagram.get("username", "").strip(),
         video_path=resolve_path(video.get("path", "./video_reel1.mp4"), config_path.parent),
+        image_posts_enabled=bool(image_posts.get("enabled", False)),
+        image_dir=resolve_path(image_posts.get("dir", "generated_posts"), config_path.parent),
+        image_template=image_posts.get("template", "post_{number:03d}.png"),
+        image_text_template=image_posts.get("text_template", "{number} post"),
+        image_bg=image_posts.get("background", "#000000"),
+        image_fg=image_posts.get("foreground", "#ffffff"),
         hashtags=posting.get("hashtags", "#yumor").strip(),
         caption_template=posting.get("caption_template", "{number}-reels {hashtags}"),
         posts_per_day=int(posting.get("posts_per_day", 50)),
@@ -142,7 +162,7 @@ class InstagramBrowserPoster:
     def validate(self) -> None:
         if not self.config.username:
             raise ValueError("Instagram username is missing in config.json")
-        if not self.config.video_path.exists():
+        if not self.config.image_posts_enabled and not self.config.video_path.exists():
             raise FileNotFoundError(f"Video file not found: {self.config.video_path}")
         if self.config.posts_per_day < 1:
             raise ValueError("posts_per_day must be at least 1")
@@ -249,6 +269,48 @@ class InstagramBrowserPoster:
             time=datetime.now().strftime("%H:%M"),
         ).strip()
 
+    def media_path_for(self, post_number: Union[int, str]) -> Path:
+        if not self.config.image_posts_enabled:
+            return self.config.video_path
+        number = int(post_number) if str(post_number).isdigit() else post_number
+        filename = self.config.image_template.format(number=number)
+        path = self.config.image_dir / filename
+        if not path.exists():
+            self.generate_text_post_image(path, post_number)
+        return path
+
+    def generate_text_post_image(self, path: Path, post_number: Union[int, str]) -> None:
+        if Image is None or ImageDraw is None or ImageFont is None:
+            raise RuntimeError("Pillow is required for image post generation. Install pillow.")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        width, height = 1080, 1080
+        text = self.config.image_text_template.format(number=post_number)
+        image = Image.new("RGB", (width, height), self.config.image_bg)
+        draw = ImageDraw.Draw(image)
+
+        font = self.load_font(190)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        x = (width - text_width) / 2
+        y = (height - text_height) / 2 - 20
+        draw.text((x, y), text, font=font, fill=self.config.image_fg)
+        image.save(path, "PNG")
+        logger.info("Generated image post: %s", path)
+
+    def load_font(self, size: int):
+        candidates = [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return ImageFont.truetype(candidate, size)
+        return ImageFont.load_default()
+
     def click_first(self, selectors: List[str], timeout: int = 5000) -> bool:
         for selector in selectors:
             try:
@@ -278,7 +340,8 @@ class InstagramBrowserPoster:
 
     def upload_reel(self, post_number: Union[int, str], auto_share: bool = True) -> bool:
         caption = self.create_caption(post_number)
-        logger.info("Starting browser upload for reel %s: %s", post_number, caption)
+        media_path = self.media_path_for(post_number)
+        logger.info("Starting browser upload for post %s: %s", post_number, caption)
         try:
             self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
             logger.info("Looking for Create button...")
@@ -301,8 +364,8 @@ class InstagramBrowserPoster:
                 logger.info("Create button not found; opening create URL.")
                 self.page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=60000)
 
-            self.set_video_file()
-            logger.info("Video selected: %s", self.config.video_path)
+            self.set_media_file(media_path)
+            logger.info("Media selected: %s", media_path)
 
             logger.info("Clicking first Next...")
             self.click_next()
@@ -317,7 +380,7 @@ class InstagramBrowserPoster:
                     logger.info("Share button selector not found; trying keyboard fallback.")
                     self.page.keyboard.press("Tab")
                     self.page.keyboard.press("Enter")
-                logger.info("Share clicked for reel %s", post_number)
+                logger.info("Share clicked for post %s", post_number)
                 self.finish_share_dialog()
             else:
                 input("Caption tayyor. Post qilish uchun Instagram oynasida Share bosing, keyin Enter: ")
@@ -326,7 +389,7 @@ class InstagramBrowserPoster:
             self.log_post(post_number, caption, "submitted")
             return True
         except Exception as exc:
-            logger.exception("Browser upload failed for reel %s: %s", post_number, exc)
+            logger.exception("Browser upload failed for post %s: %s", post_number, exc)
             self.save_debug_artifacts(f"upload_failed_{post_number}")
             self.log_post(post_number, caption, "failed")
             return False
@@ -352,30 +415,30 @@ class InstagramBrowserPoster:
             raise RuntimeError("Next button not found")
         self.pause(1.0)
 
-    def set_video_file(self) -> None:
+    def set_media_file(self, media_path: Path) -> None:
         logger.info("Looking for upload input or Create menu...")
-        if self.try_set_existing_file_input(timeout=2500):
+        if self.try_set_existing_file_input(media_path, timeout=2500):
             return
 
         if self.select_create_post_if_menu_open():
-            if self.try_set_existing_file_input(timeout=30000):
+            if self.try_set_existing_file_input(media_path, timeout=30000):
                 return
-            if self.click_select_from_computer():
+            if self.click_select_from_computer(media_path):
                 return
 
         logger.info("Opening direct create URL as fallback...")
         self.page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=60000)
-        if self.try_set_existing_file_input(timeout=30000):
+        if self.try_set_existing_file_input(media_path, timeout=30000):
             return
-        if self.click_select_from_computer():
+        if self.click_select_from_computer(media_path):
             return
         raise RuntimeError("File input/file chooser not found")
 
-    def try_set_existing_file_input(self, timeout: int) -> bool:
+    def try_set_existing_file_input(self, media_path: Path, timeout: int) -> bool:
         try:
             file_input = self.page.locator("input[type='file']").first
             file_input.wait_for(state="attached", timeout=timeout)
-            file_input.set_input_files(str(self.config.video_path))
+            file_input.set_input_files(str(media_path))
             return True
         except Exception:
             return False
@@ -445,7 +508,7 @@ class InstagramBrowserPoster:
         except Exception:
             return False
 
-    def click_select_from_computer(self) -> bool:
+    def click_select_from_computer(self, media_path: Path) -> bool:
         logger.info("Looking for Select from computer button...")
         labels = ["Select from computer", "Выбрать с компьютера", "Выбрать на компьютере"]
         for label in labels:
@@ -461,12 +524,12 @@ class InstagramBrowserPoster:
                     try:
                         with self.page.expect_file_chooser(timeout=5000) as chooser_info:
                             button.click(timeout=3000, force=True)
-                        chooser_info.value.set_files(str(self.config.video_path))
+                        chooser_info.value.set_files(str(media_path))
                         logger.info("Selected video through file chooser button: %s", label)
                         return True
                     except Exception:
                         button.click(timeout=3000, force=True)
-                        if self.try_set_existing_file_input(timeout=10000):
+                        if self.try_set_existing_file_input(media_path, timeout=10000):
                             return True
                 except Exception:
                     continue
