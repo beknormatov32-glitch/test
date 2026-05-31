@@ -680,13 +680,15 @@ class InstagramBrowserPoster:
         logger.info("Waiting for share confirmation...")
         success_selectors = [
             "text='Your reel has been shared.'",
+            "text='Your post has been shared.'",
             "text='Reel shared'",
+            "text='Post shared'",
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
         for selector in success_selectors:
             try:
-                self.page.locator(selector).first.wait_for(state="visible", timeout=180000)
+                self.page.locator(selector).first.wait_for(state="visible", timeout=45000)
                 break
             except Exception:
                 continue
@@ -703,7 +705,7 @@ class InstagramBrowserPoster:
     def click_done(self) -> bool:
         done_texts = ["Done", "Готово"]
         for text in done_texts:
-            xpath = f"xpath=//div[@role='button' and normalize-space()='{text}'] | //button[normalize-space()='{text}']"
+            xpath = f"xpath=//*[normalize-space()='{text}' and (self::div or self::button or self::span or self::a)]"
             try:
                 button = self.page.locator(xpath).last
                 button.wait_for(state="visible", timeout=10000)
@@ -716,10 +718,11 @@ class InstagramBrowserPoster:
             try:
                 clicked = self.page.evaluate(
                     """(label) => {
-                        const nodes = [...document.querySelectorAll('div[role="button"], button')];
+                        const nodes = [...document.querySelectorAll('div[role="button"], button, span, a')];
                         const node = nodes.reverse().find((el) => el.textContent && el.textContent.trim() === label);
                         if (!node) return false;
-                        node.click();
+                        const clickable = node.closest('div[role="button"], button, a') || node;
+                        clickable.click();
                         return true;
                     }""",
                     text,
