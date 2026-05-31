@@ -686,21 +686,37 @@ class InstagramBrowserPoster:
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
-        for selector in success_selectors:
-            try:
-                self.page.locator(selector).first.wait_for(state="visible", timeout=45000)
-                break
-            except Exception:
-                continue
+        try:
+            self.page.locator(", ".join(success_selectors)).first.wait_for(state="visible", timeout=60000)
+        except Exception:
+            logger.warning("Share confirmation was not detected, trying to continue anyway.")
 
         logger.info("Looking for Done button...")
         if self.click_done():
             logger.info("Done clicked.")
-            self.pause(1.0)
+            self.wait_for_share_dialog_closed()
             return
         logger.warning("Done button not found; trying Escape.")
         self.page.keyboard.press("Escape")
-        self.pause(1.0)
+        self.wait_for_share_dialog_closed()
+
+    def wait_for_share_dialog_closed(self) -> None:
+        done_or_success = (
+            "text='Done', text='Готово', text='Your reel has been shared.', "
+            "text='Your post has been shared.', text='Reel shared', text='Post shared'"
+        )
+        try:
+            self.page.locator(done_or_success).first.wait_for(state="hidden", timeout=10000)
+            self.pause(0.3)
+            return
+        except Exception:
+            pass
+        try:
+            self.page.keyboard.press("Escape")
+            self.page.locator(done_or_success).first.wait_for(state="hidden", timeout=5000)
+        except Exception:
+            logger.warning("Share dialog may still be visible; next post will reload Instagram home.")
+        self.pause(0.3)
 
     def click_done(self) -> bool:
         done_texts = ["Done", "Готово"]
