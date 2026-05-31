@@ -18,11 +18,16 @@ import requests
 
 
 BASE_DIR = Path(__file__).resolve().parent
-STATE_FILE = BASE_DIR / "telegram_bot_state.json"
 POSTER = BASE_DIR / "instagram_browser_poster.py"
 LOG_FILE = BASE_DIR / "instagram_poster.log"
 PROFILE_DIR = Path(os.getenv("BROWSER_PROFILE_DIR", BASE_DIR / "chrome_profile"))
 STORAGE_STATE_PATH = Path(os.getenv("STORAGE_STATE_PATH", BASE_DIR / "storage_state.json"))
+STATE_FILE = Path(
+    os.getenv(
+        "TELEGRAM_STATE_FILE",
+        str(STORAGE_STATE_PATH.parent / "telegram_bot_state.json") if os.getenv("STORAGE_STATE_PATH") else str(BASE_DIR / "telegram_bot_state.json"),
+    )
+)
 
 
 class TelegramPosterBot:
@@ -41,6 +46,7 @@ class TelegramPosterBot:
         return {"admin_chat_id": os.getenv("TELEGRAM_ADMIN_CHAT_ID")}
 
     def save_state(self) -> None:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         with STATE_FILE.open("w", encoding="utf-8") as file:
             json.dump(self.state, file, ensure_ascii=False, indent=2)
 
@@ -110,6 +116,8 @@ class TelegramPosterBot:
                 self.send(chat_id, self.tail_logs())
             elif command == "/profile":
                 self.send(chat_id, self.profile_status())
+            elif command == "/session":
+                self.send(chat_id, self.session_status())
             elif command == "/stop":
                 self.stop_process()
                 self.send(chat_id, "Jarayon to'xtatildi.")
@@ -179,6 +187,7 @@ class TelegramPosterBot:
             "/stop - jarayonni to'xtatish\n"
             "/logs - oxirgi loglar\n"
             "/profile - Chrome profile/session holati\n"
+            "/session - storage_state.json holati\n"
             "Chrome profile import: Mac'dagi chrome_profile papkasini zip qilib botga document sifatida yuboring.\n"
             "/whoami - chat id"
         )
@@ -196,6 +205,24 @@ class TelegramPosterBot:
         files = sum(1 for item in PROFILE_DIR.rglob("*") if item.is_file())
         size = sum(item.stat().st_size for item in PROFILE_DIR.rglob("*") if item.is_file())
         return f"Profile bor: {PROFILE_DIR}\nFiles: {files}\nSize: {size // 1024 // 1024} MB"
+
+    def session_status(self) -> str:
+        if not STORAGE_STATE_PATH.exists():
+            return f"storage_state topilmadi: {STORAGE_STATE_PATH}\nAvval storage_state.json faylini botga yuboring."
+        try:
+            data = json.loads(STORAGE_STATE_PATH.read_text(encoding="utf-8"))
+            cookies = data.get("cookies", [])
+            instagram_cookies = [cookie for cookie in cookies if "instagram.com" in cookie.get("domain", "")]
+            has_session = any(cookie.get("name") == "sessionid" for cookie in instagram_cookies)
+            size = STORAGE_STATE_PATH.stat().st_size
+            return (
+                f"storage_state bor: {STORAGE_STATE_PATH}\n"
+                f"Size: {size} bytes\n"
+                f"Instagram cookies: {len(instagram_cookies)}\n"
+                f"sessionid: {'bor' if has_session else 'yoq'}"
+            )
+        except Exception as exc:
+            return f"storage_state o'qilmadi: {exc}"
 
     def tail_logs(self, limit: int = 40) -> str:
         if not LOG_FILE.exists():
@@ -297,6 +324,9 @@ class TelegramPosterBot:
 
         command = [sys.executable, str(POSTER), *args]
         if os.getenv("POSTER_HEADLESS", "").lower() in {"1", "true", "yes"} and "--headless" not in command:
+            if not STORAGE_STATE_PATH.exists():
+                self.send(chat_id, self.session_status())
+                return
             command.append("--headless")
         self.process_output = []
         self.process = subprocess.Popen(
