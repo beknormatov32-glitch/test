@@ -677,7 +677,7 @@ class InstagramBrowserPoster:
         )
 
     def finish_share_dialog(self) -> None:
-        logger.info("Waiting for share confirmation...")
+        logger.info("Waiting for share dialog...")
         success_selectors = [
             "text='Your reel has been shared.'",
             "text='Your post has been shared.'",
@@ -686,13 +686,20 @@ class InstagramBrowserPoster:
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
-        try:
-            self.page.locator(", ".join(success_selectors)).first.wait_for(state="visible", timeout=60000)
-        except Exception:
-            logger.warning("Share confirmation was not detected, trying to continue anyway.")
+        for attempt in range(30):
+            if self.click_done(timeout_ms=900):
+                logger.info("Done clicked.")
+                self.wait_for_share_dialog_closed()
+                return
+            try:
+                if self.page.locator(", ".join(success_selectors)).first.is_visible(timeout=200):
+                    logger.debug("Share confirmation visible on attempt %s", attempt + 1)
+            except Exception:
+                pass
+            self.pause(0.5)
 
-        logger.info("Looking for Done button...")
-        if self.click_done():
+        logger.info("Looking for Done button after short wait...")
+        if self.click_done(timeout_ms=5000):
             logger.info("Done clicked.")
             self.wait_for_share_dialog_closed()
             return
@@ -718,12 +725,12 @@ class InstagramBrowserPoster:
             logger.warning("Share dialog may still be visible; next post will reload Instagram home.")
         self.pause(0.3)
 
-    def click_done(self) -> bool:
+    def click_done(self, timeout_ms: int = 5000) -> bool:
         done_texts = ["Done", "Готово"]
         for text in done_texts:
             try:
                 button = self.page.get_by_text(text, exact=True).last
-                button.wait_for(state="visible", timeout=5000)
+                button.wait_for(state="visible", timeout=timeout_ms)
                 box = button.bounding_box()
                 if box:
                     self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
@@ -738,7 +745,7 @@ class InstagramBrowserPoster:
             xpath = f"xpath=//*[normalize-space()='{text}' and (self::div or self::button or self::span or self::a)]"
             try:
                 button = self.page.locator(xpath).last
-                button.wait_for(state="visible", timeout=10000)
+                button.wait_for(state="visible", timeout=timeout_ms)
                 box = button.bounding_box()
                 if box:
                     self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
@@ -776,7 +783,7 @@ class InstagramBrowserPoster:
                 "div[role='button']:has-text('Готово')",
                 "button:has-text('Готово')",
             ],
-            timeout=10000,
+            timeout=timeout_ms,
         )
 
     def click_done_by_dialog_position(self) -> bool:
