@@ -21,11 +21,12 @@ from typing import Any, List, Optional, Union
 from apscheduler.schedulers.background import BackgroundScheduler
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 except ImportError:
     Image = None
     ImageDraw = None
     ImageFont = None
+    PngImagePlugin = None
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -275,11 +276,7 @@ class InstagramBrowserPoster:
         number = int(post_number) if str(post_number).isdigit() else post_number
         filename = self.config.image_template.format(number=number)
         path = self.config.image_dir / filename
-        if path.exists() and path.stat().st_size < 1024:
-            logger.info("Generated image is too small (%s bytes), regenerating: %s", path.stat().st_size, path)
-            path.unlink(missing_ok=True)
-        if not path.exists():
-            self.generate_text_post_image(path, post_number)
+        self.generate_text_post_image(path, post_number)
         return path
 
     def generate_text_post_image(self, path: Path, post_number: Union[int, str]) -> None:
@@ -299,20 +296,32 @@ class InstagramBrowserPoster:
         x = (width - text_width) / 2
         y = (height - text_height) / 2 - 20
         draw.text((x, y), text, font=font, fill=self.config.image_fg)
-        image.save(path, "PNG", compress_level=0)
+        image.save(path, "PNG", optimize=True, compress_level=9)
+        if path.stat().st_size < 1024:
+            metadata = PngImagePlugin.PngInfo()
+            metadata.add_text("instagram_min_size_padding", "0" * 2048)
+            image.save(path, "PNG", pnginfo=metadata, optimize=True, compress_level=9)
         logger.info("Generated image post: %s (%s bytes)", path, path.stat().st_size)
 
     def load_font(self, size: int):
         candidates = [
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans.ttf",
             "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
             "/System/Library/Fonts/Supplemental/Arial.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
         ]
         for candidate in candidates:
-            if Path(candidate).exists():
-                return ImageFont.truetype(candidate, size)
-        return ImageFont.load_default()
+            if not candidate.startswith("/") or Path(candidate).exists():
+                try:
+                    return ImageFont.truetype(candidate, size)
+                except Exception:
+                    continue
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
 
     def click_first(self, selectors: List[str], timeout: int = 5000) -> bool:
         for selector in selectors:
