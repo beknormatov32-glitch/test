@@ -402,8 +402,18 @@ class InstagramBrowserPoster:
 
     def click_next(self) -> None:
         if not self.click_text_button(["Next", "Далее", "Дальше"], timeout_ms=15000):
+            logger.error("Visible page text before Next failure: %s", self.visible_page_text())
             raise RuntimeError("Next button not found")
         self.pause(0.6)
+
+    def visible_page_text(self) -> str:
+        try:
+            text = self.page.evaluate(
+                """() => document.body ? document.body.innerText.replace(/\\s+/g, ' ').trim().slice(0, 1200) : ''"""
+            )
+            return text or "<empty>"
+        except Exception as exc:
+            return f"<could not read page text: {exc}>"
 
     def click_text_button(self, labels: List[str], timeout_ms: int = 5000) -> bool:
         deadline = time.monotonic() + timeout_ms / 1000

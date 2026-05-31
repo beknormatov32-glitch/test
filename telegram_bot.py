@@ -21,6 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 POSTER = BASE_DIR / "instagram_browser_poster.py"
 LOG_FILE = BASE_DIR / "instagram_poster.log"
 PROFILE_DIR = Path(os.getenv("BROWSER_PROFILE_DIR", BASE_DIR / "chrome_profile"))
+DEBUG_DIR = Path(os.getenv("BROWSER_DEBUG_DIR", BASE_DIR / "debug"))
 STORAGE_STATE_PATH = Path(os.getenv("STORAGE_STATE_PATH", BASE_DIR / "storage_state.json"))
 STATE_FILE = Path(
     os.getenv(
@@ -60,6 +61,16 @@ class TelegramPosterBot:
 
     def send(self, chat_id: int, text: str) -> None:
         self.request("sendMessage", chat_id=chat_id, text=text[-3900:])
+
+    def send_document(self, chat_id: int, path: Path, caption: str = "") -> None:
+        with path.open("rb") as file:
+            response = requests.post(
+                f"{self.api}/sendDocument",
+                data={"chat_id": chat_id, "caption": caption[-1000:]},
+                files={"document": (path.name, file)},
+                timeout=120,
+            )
+        response.raise_for_status()
 
     def is_admin(self, chat_id: int) -> bool:
         admin = self.state.get("admin_chat_id")
@@ -114,6 +125,8 @@ class TelegramPosterBot:
                 self.send(chat_id, self.status_text())
             elif command == "/logs":
                 self.send(chat_id, self.tail_logs())
+            elif command == "/debug":
+                self.send_latest_debug(chat_id)
             elif command == "/profile":
                 self.send(chat_id, self.profile_status())
             elif command == "/session":
@@ -186,6 +199,7 @@ class TelegramPosterBot:
             "/auto 15 - hozir boshlash, keyin har 15 minut\n"
             "/stop - jarayonni to'xtatish\n"
             "/logs - oxirgi loglar\n"
+            "/debug - oxirgi debug screenshot/html\n"
             "/profile - Chrome profile/session holati\n"
             "/session - storage_state.json holati\n"
             "Chrome profile import: Mac'dagi chrome_profile papkasini zip qilib botga document sifatida yuboring.\n"
@@ -229,6 +243,19 @@ class TelegramPosterBot:
             return "Log file hali yo'q."
         lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
         return "\n".join(lines[-limit:]) or "Log bo'sh."
+
+    def send_latest_debug(self, chat_id: int) -> None:
+        if not DEBUG_DIR.exists():
+            self.send(chat_id, f"Debug papka yo'q: {DEBUG_DIR}")
+            return
+        files = [path for path in DEBUG_DIR.iterdir() if path.is_file() and path.suffix.lower() in {".png", ".html"}]
+        if not files:
+            self.send(chat_id, f"Debug fayl yo'q: {DEBUG_DIR}")
+            return
+        latest_png = sorted([path for path in files if path.suffix.lower() == ".png"], key=lambda path: path.stat().st_mtime)[-1:]
+        latest_html = sorted([path for path in files if path.suffix.lower() == ".html"], key=lambda path: path.stat().st_mtime)[-1:]
+        for path in latest_png + latest_html:
+            self.send_document(chat_id, path, f"Debug: {path.name}")
 
     def last_output(self) -> str:
         return "\n".join(self.process_output[-20:]) or "Hali output yo'q."
@@ -346,7 +373,7 @@ class TelegramPosterBot:
         for line in self.process.stdout:
             clean = line.rstrip()
             self.process_output.append(clean)
-            if any(marker in clean for marker in ["Share clicked", "Done clicked", "Batch completed", "Batch stopped", "ERROR", "failed"]):
+            if any(marker in clean for marker in ["Share clicked", "Done clicked", "Batch completed", "Batch stopped", "ERROR", "failed", "Debug saved"]):
                 self.send(chat_id, clean)
         code = self.process.wait()
         self.send(chat_id, f"Jarayon tugadi. Exit code: {code}")
