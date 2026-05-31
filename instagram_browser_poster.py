@@ -212,12 +212,22 @@ class InstagramBrowserPoster:
 
     def close_browser(self) -> None:
         self.save_storage_state()
-        if self.context:
-            self.context.close()
-        if self.browser:
-            self.browser.close()
+        for item, label in ((self.context, "context"), (self.browser, "browser")):
+            if not item:
+                continue
+            try:
+                item.close()
+            except Exception as exc:
+                logger.warning("Could not close %s cleanly: %s", label, exc)
         if self.playwright:
-            self.playwright.stop()
+            try:
+                self.playwright.stop()
+            except Exception as exc:
+                logger.warning("Could not stop Playwright cleanly: %s", exc)
+        self.context = None
+        self.browser = None
+        self.playwright = None
+        self.page = None
 
     def save_storage_state(self) -> None:
         if not self.context or not self.config.storage_state_path:
@@ -1080,13 +1090,20 @@ class InstagramBrowserPoster:
                         logger.info("Waiting %s seconds before next post...", delay_seconds)
                         time.sleep(delay_seconds)
                     continue
-                logger.error("Post %s failed. Retrying same number in %s seconds.", number, retry_delay_seconds)
+                logger.error("Post %s failed. Restarting browser and retrying same number in %s seconds.", number, retry_delay_seconds)
+                self.restart_browser()
                 time.sleep(retry_delay_seconds)
         except KeyboardInterrupt:
             logger.info("Stopped by user.")
             return True
         finally:
             self.close_browser()
+
+    def restart_browser(self) -> None:
+        logger.info("Restarting browser session...")
+        self.close_browser()
+        self.start_browser()
+        self.ensure_login()
 
 
 def build_parser() -> argparse.ArgumentParser:
