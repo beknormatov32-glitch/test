@@ -9,5 +9,6 @@ debug
 chrome_profile
 *.mp4
 !video_reel.mp4
+!video_reel1.mp4
 *.mov
 *.zip
