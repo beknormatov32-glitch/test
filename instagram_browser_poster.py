@@ -600,23 +600,74 @@ class InstagramBrowserPoster:
 
     def fill_caption(self, caption: str) -> None:
         selectors = [
+            "[aria-label*='caption' i]",
+            "[aria-label*='подпись' i]",
+            "[placeholder*='caption' i]",
+            "[placeholder*='подпись' i]",
+            "textarea[aria-label*='caption' i]",
             "div[aria-label='Write a caption...'][contenteditable='true']",
+            "div[aria-label='Add a caption...'][contenteditable='true']",
             "div[aria-label='Напишите подпись...'][contenteditable='true']",
             "div[aria-label='Добавьте подпись...'][contenteditable='true']",
             "[role='textbox'][contenteditable='true']",
             "textarea",
             "div[contenteditable='true']",
         ]
+        if self.try_fill_caption(caption, selectors):
+            return
+        logger.warning("Caption field not found; trying to advance to caption screen again.")
+        if self.click_text_button(["Next", "Далее", "Дальше"], timeout_ms=5000):
+            self.pause(1.0)
+            if self.try_fill_caption(caption, selectors):
+                return
+        logger.error("Visible page text before caption failure: %s", self.visible_page_text())
+        raise RuntimeError("Caption field not found")
+
+    def try_fill_caption(self, caption: str, selectors: List[str]) -> bool:
         for selector in selectors:
             try:
                 field = self.page.locator(selector).last
                 field.wait_for(state="visible", timeout=10000)
                 if self.type_caption(field, caption):
                     logger.info("Caption filled: %s", caption)
-                    return
+                    return True
             except Exception:
                 continue
-        raise RuntimeError("Caption field not found")
+        if self.type_caption_by_js(caption):
+            logger.info("Caption filled by JS fallback: %s", caption)
+            return True
+        return False
+
+    def type_caption_by_js(self, caption: str) -> bool:
+        try:
+            return bool(
+                self.page.evaluate(
+                    """(value) => {
+                        const candidates = [...document.querySelectorAll(
+                            'textarea, [contenteditable="true"], [role="textbox"], [aria-label], [placeholder]'
+                        )].filter((el) => {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width < 50 || rect.height < 15) return false;
+                            const text = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('placeholder') || ''}`.toLowerCase();
+                            return text.includes('caption') || text.includes('подпись') || el.getAttribute('contenteditable') === 'true';
+                        });
+                        const el = candidates[candidates.length - 1];
+                        if (!el) return false;
+                        el.focus();
+                        if ('value' in el) {
+                            el.value = value;
+                        } else {
+                            el.textContent = value;
+                        }
+                        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                    }""",
+                    caption,
+                )
+            )
+        except Exception:
+            return False
 
     def type_caption(self, field, caption: str) -> bool:
         try:
