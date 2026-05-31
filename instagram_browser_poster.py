@@ -54,6 +54,7 @@ class BrowserConfig:
     json_log: Path
     profile_dir: Path
     debug_dir: Path
+    storage_state_path: Optional[Path]
     action_delay: float
     verbose: bool
 
@@ -112,6 +113,7 @@ def read_config(config_path: Path) -> BrowserConfig:
         json_log=resolve_path(os.getenv("INSTAGRAM_JSON_LOG") or logging_cfg.get("json_log", "posts_log.json"), config_path.parent),
         profile_dir=resolve_path(os.getenv("BROWSER_PROFILE_DIR") or browser_cfg.get("profile_dir", "chrome_profile"), config_path.parent),
         debug_dir=resolve_path(os.getenv("BROWSER_DEBUG_DIR") or browser_cfg.get("debug_dir", "debug"), config_path.parent),
+        storage_state_path=resolve_path(os.getenv("STORAGE_STATE_PATH"), config_path.parent) if os.getenv("STORAGE_STATE_PATH") else None,
         action_delay=float(os.getenv("BROWSER_ACTION_DELAY") or browser_cfg.get("action_delay", 0.7)),
         verbose=bool(logging_cfg.get("verbose", True)),
     )
@@ -126,6 +128,7 @@ class InstagramBrowserPoster:
         self.config = config
         self.headless = headless
         self.playwright = None
+        self.browser = None
         self.context = None
         self.page = None
         self.scheduler = BackgroundScheduler(timezone=config.timezone)
@@ -150,9 +153,7 @@ class InstagramBrowserPoster:
         self.config.profile_dir.mkdir(parents=True, exist_ok=True)
         self.playwright = sync_playwright().start()
         launch_options = {
-            "user_data_dir": str(self.config.profile_dir),
             "headless": self.headless,
-            "viewport": {"width": 1280, "height": 900},
             "args": ["--disable-blink-features=AutomationControlled"],
         }
         chrome_path = self.find_chrome_path()
@@ -161,7 +162,18 @@ class InstagramBrowserPoster:
             logger.info("Using browser executable: %s", chrome_path)
         else:
             logger.info("Using Playwright bundled Chromium.")
-        self.context = self.playwright.chromium.launch_persistent_context(**launch_options)
+
+        if self.config.storage_state_path and self.config.storage_state_path.exists():
+            logger.info("Using storage state: %s", self.config.storage_state_path)
+            self.browser = self.playwright.chromium.launch(**launch_options)
+            self.context = self.browser.new_context(
+                storage_state=str(self.config.storage_state_path),
+                viewport={"width": 1280, "height": 900},
+            )
+        else:
+            launch_options["user_data_dir"] = str(self.config.profile_dir)
+            launch_options["viewport"] = {"width": 1280, "height": 900}
+            self.context = self.playwright.chromium.launch_persistent_context(**launch_options)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
 
     def find_chrome_path(self) -> Optional[str]:
@@ -178,19 +190,38 @@ class InstagramBrowserPoster:
         return None
 
     def close_browser(self) -> None:
+        self.save_storage_state()
         if self.context:
             self.context.close()
+        if self.browser:
+            self.browser.close()
         if self.playwright:
             self.playwright.stop()
+
+    def save_storage_state(self) -> None:
+        if not self.context or not self.config.storage_state_path:
+            return
+        try:
+            self.config.storage_state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.context.storage_state(path=str(self.config.storage_state_path))
+            logger.info("Storage state saved: %s", self.config.storage_state_path)
+        except Exception as exc:
+            logger.warning("Could not save storage state: %s", exc)
 
     def ensure_login(self) -> None:
         self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
         logger.info("Chrome opened. Checking login state...")
         if not self.is_logged_in():
+            if self.headless or not sys.stdin.isatty():
+                raise RuntimeError(
+                    "Instagram session is not logged in. Import storage_state.json first, "
+                    "or run this script locally with a visible browser and complete login."
+                )
             logger.info("Login page detected. Log in manually if needed.")
             input("Login/SMS/challenge tugagach Enter bosing: ")
             self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
         logger.info("Browser session ready.")
+        self.save_storage_state()
 
     def is_logged_in(self) -> bool:
         selectors = [

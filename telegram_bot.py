@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,6 +21,8 @@ BASE_DIR = Path(__file__).resolve().parent
 STATE_FILE = BASE_DIR / "telegram_bot_state.json"
 POSTER = BASE_DIR / "instagram_browser_poster.py"
 LOG_FILE = BASE_DIR / "instagram_poster.log"
+PROFILE_DIR = Path(os.getenv("BROWSER_PROFILE_DIR", BASE_DIR / "chrome_profile"))
+STORAGE_STATE_PATH = Path(os.getenv("STORAGE_STATE_PATH", BASE_DIR / "storage_state.json"))
 
 
 class TelegramPosterBot:
@@ -81,11 +84,16 @@ class TelegramPosterBot:
 
     def handle_message(self, message: dict[str, Any]) -> None:
         chat_id = message["chat"]["id"]
-        text = (message.get("text") or "").strip()
-        if not text:
-            return
         if not self.is_admin(chat_id):
             self.send(chat_id, "Ruxsat yo'q.")
+            return
+
+        if message.get("document"):
+            self.handle_document(chat_id, message["document"])
+            return
+
+        text = (message.get("text") or "").strip()
+        if not text:
             return
 
         parts = text.split()
@@ -100,6 +108,8 @@ class TelegramPosterBot:
                 self.send(chat_id, self.status_text())
             elif command == "/logs":
                 self.send(chat_id, self.tail_logs())
+            elif command == "/profile":
+                self.send(chat_id, self.profile_status())
             elif command == "/stop":
                 self.stop_process()
                 self.send(chat_id, "Jarayon to'xtatildi.")
@@ -132,6 +142,8 @@ class TelegramPosterBot:
             "/auto 15 - hozir boshlash, keyin har 15 minut\n"
             "/stop - jarayonni to'xtatish\n"
             "/logs - oxirgi loglar\n"
+            "/profile - Chrome profile/session holati\n"
+            "Chrome profile import: Mac'dagi chrome_profile papkasini zip qilib botga document sifatida yuboring.\n"
             "/whoami - chat id"
         )
 
@@ -142,6 +154,13 @@ class TelegramPosterBot:
             return f"To'xtagan. Exit code: {self.process.poll()}\n\n{self.last_output()}"
         return "Hozir aktiv jarayon yo'q."
 
+    def profile_status(self) -> str:
+        if not PROFILE_DIR.exists():
+            return f"Profile topilmadi: {PROFILE_DIR}"
+        files = sum(1 for item in PROFILE_DIR.rglob("*") if item.is_file())
+        size = sum(item.stat().st_size for item in PROFILE_DIR.rglob("*") if item.is_file())
+        return f"Profile bor: {PROFILE_DIR}\nFiles: {files}\nSize: {size // 1024 // 1024} MB"
+
     def tail_logs(self, limit: int = 40) -> str:
         if not LOG_FILE.exists():
             return "Log file hali yo'q."
@@ -150,6 +169,90 @@ class TelegramPosterBot:
 
     def last_output(self) -> str:
         return "\n".join(self.process_output[-20:]) or "Hali output yo'q."
+
+    def handle_document(self, chat_id: int, document: dict[str, Any]) -> None:
+        file_name = document.get("file_name", "")
+        if file_name.endswith(".json"):
+            self.handle_storage_state(chat_id, document)
+            return
+        if not file_name.endswith(".zip"):
+            self.send(chat_id, "Faqat storage_state.json yoki .zip profile fayl qabul qilinadi.")
+            return
+
+        self.stop_process()
+        self.send(chat_id, "Profile zip yuklanmoqda...")
+        file_id = document["file_id"]
+        file_info = self.request("getFile", file_id=file_id)["result"]
+        file_path = file_info["file_path"]
+        url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+        response = requests.get(url, timeout=300)
+        response.raise_for_status()
+
+        tmp_zip = BASE_DIR / "profile_upload.zip"
+        tmp_zip.write_bytes(response.content)
+        self.import_profile_zip(tmp_zip)
+        tmp_zip.unlink(missing_ok=True)
+        self.send(chat_id, "Profile import qilindi.\n" + self.profile_status() + "\nEndi /once 1 bilan test qiling.")
+
+    def handle_storage_state(self, chat_id: int, document: dict[str, Any]) -> None:
+        self.stop_process()
+        self.send(chat_id, "storage_state.json yuklanmoqda...")
+        file_id = document["file_id"]
+        file_info = self.request("getFile", file_id=file_id)["result"]
+        file_path = file_info["file_path"]
+        url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+        response = requests.get(url, timeout=120)
+        response.raise_for_status()
+
+        data = response.json()
+        if not isinstance(data, dict) or "cookies" not in data:
+            raise RuntimeError("Bu Playwright storage_state.json fayliga o'xshamayapti")
+
+        STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STORAGE_STATE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.send(chat_id, f"storage_state import qilindi: {STORAGE_STATE_PATH}\nEndi /once 1 bilan test qiling.")
+
+    def import_profile_zip(self, zip_path: Path) -> None:
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        for child in PROFILE_DIR.iterdir():
+            if child.is_dir():
+                self.remove_tree(child)
+            else:
+                child.unlink(missing_ok=True)
+
+        with zipfile.ZipFile(zip_path) as archive:
+            members = archive.infolist()
+            common_prefix = self.detect_common_prefix([member.filename for member in members])
+            for member in members:
+                if member.is_dir():
+                    continue
+                name = member.filename
+                if common_prefix and name.startswith(common_prefix):
+                    name = name[len(common_prefix):]
+                target = PROFILE_DIR / name
+                target = target.resolve()
+                if not str(target).startswith(str(PROFILE_DIR.resolve())):
+                    raise RuntimeError("Unsafe zip path detected")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source:
+                    target.write_bytes(source.read())
+
+    def detect_common_prefix(self, names: list[str]) -> str:
+        clean = [name for name in names if name and "/" in name]
+        if not clean:
+            return ""
+        first_parts = clean[0].split("/")
+        if first_parts[0] in {"chrome_profile", "Default"}:
+            return first_parts[0] + "/"
+        return ""
+
+    def remove_tree(self, path: Path) -> None:
+        for child in path.iterdir():
+            if child.is_dir():
+                self.remove_tree(child)
+            else:
+                child.unlink(missing_ok=True)
+        path.rmdir()
 
     def start_process(self, chat_id: int, args: list[str]) -> None:
         if self.process and self.process.poll() is None:

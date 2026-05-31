@@ -11,6 +11,8 @@ instagram_poster.log
 posts_log.json
 telegram_bot_state.json
 session.json
+storage_state.json
+profile_upload.zip
 
 # Local env/secrets
 .env

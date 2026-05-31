@@ -8,6 +8,7 @@ ENV BROWSER_PROFILE_DIR=/data/chrome_profile
 ENV BROWSER_DEBUG_DIR=/data/debug
 ENV INSTAGRAM_LOG_FILE=/data/instagram_poster.log
 ENV INSTAGRAM_JSON_LOG=/data/posts_log.json
+ENV STORAGE_STATE_PATH=/data/storage_state.json
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 COPY requirements.txt .

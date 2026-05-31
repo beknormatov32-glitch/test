@@ -45,6 +45,7 @@ BROWSER_PROFILE_DIR=/data/chrome_profile
 BROWSER_DEBUG_DIR=/data/debug
 INSTAGRAM_LOG_FILE=/data/instagram_poster.log
 INSTAGRAM_JSON_LOG=/data/posts_log.json
+STORAGE_STATE_PATH=/data/storage_state.json
 ```
 
 ## 4. Deploy
@@ -69,6 +70,22 @@ Yoki GitHubga push qilib Railway dashboarddan deploy qiling.
 /batch 6 45
 /auto
 /stop
+```
+
+## Login/session import qilish
+
+Railwayda browser ko'rinmaydi. Shuning uchun local Mac'dan session export qiling:
+
+```bash
+cd "/Users/ogabeknormatov/Desktop/Instagram automation"
+source venv/bin/activate
+python export_instagram_state.py
+```
+
+Bu `storage_state.json` yaratadi. Shu faylni Telegram botga document qilib yuboring. Bot uni `/data/storage_state.json`ga saqlaydi. Keyin:
+
+```text
+/once 1
 ```
 
 ## Agar login/session ishlamasa
