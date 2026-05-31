@@ -10,7 +10,7 @@
     "format": "mp4"
   },
   "image_posts": {
-    "enabled": false,
+    "enabled": true,
     "dir": "generated_posts",
     "template": "post_{number:03d}.png",
     "text_template": "{number} post",
@@ -20,7 +20,7 @@
   "posting": {
     "posts_per_day": 50,
     "hashtags": "#yumor",
-    "caption_template": "{number}-reels {hashtags}",
+    "caption_template": "{number} post {hashtags}",
     "start_time": "00:00",
     "end_time": "23:59"
   },
