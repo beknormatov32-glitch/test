@@ -925,7 +925,7 @@ class InstagramBrowserPoster:
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
-        max_attempts = 3 if quick else 12
+        max_attempts = 2 if quick else 12
         for attempt in range(max_attempts):
             if self.success_message_visible(success_selectors):
                 if self.click_done(timeout_ms=500):
@@ -938,9 +938,6 @@ class InstagramBrowserPoster:
                 logger.info("Done clicked.")
                 self.wait_for_share_dialog_closed()
                 return
-            if attempt in {1, 4, 8} and self.is_share_screen():
-                logger.warning("Share screen is still visible; clicking Share again.")
-                self.click_share()
             self.pause(0.4)
 
         logger.warning("Done button not found after Share; continuing after quick submit check.")
