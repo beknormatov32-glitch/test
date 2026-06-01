@@ -859,6 +859,8 @@ class InstagramBrowserPoster:
 
     def click_share(self) -> bool:
         share_texts = ["Share", "Поделиться", "Опубликовать"]
+        if self.click_share_by_position(share_texts):
+            return True
         for text in share_texts:
             xpath = f"xpath=//div[@role='button' and normalize-space()='{text}'] | //button[normalize-space()='{text}']"
             try:
@@ -915,6 +917,35 @@ class InstagramBrowserPoster:
             ],
             timeout=30000,
         )
+
+    def click_share_by_position(self, labels: List[str]) -> bool:
+        try:
+            box = self.page.evaluate(
+                """(labels) => {
+                    const nodes = [...document.querySelectorAll('div, button, span, a')];
+                    const visible = nodes
+                        .map((el) => ({ el, rect: el.getBoundingClientRect(), text: (el.textContent || '').trim() }))
+                        .filter((item) => (
+                            labels.includes(item.text) &&
+                            item.rect.width > 10 &&
+                            item.rect.height > 10 &&
+                            item.rect.top >= 0 &&
+                            item.rect.top < 180
+                        ))
+                        .sort((a, b) => b.rect.right - a.rect.right);
+                    if (!visible.length) return null;
+                    const rect = visible[0].rect;
+                    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height, text: visible[0].text };
+                }""",
+                labels,
+            )
+            if not box:
+                return False
+            self.page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            logger.info("Clicked %s by header coordinates", box["text"])
+            return True
+        except Exception:
+            return False
 
     def finish_share_dialog(self) -> bool:
         logger.info("Waiting for share dialog...")
