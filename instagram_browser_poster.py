@@ -920,26 +920,33 @@ class InstagramBrowserPoster:
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
-        for attempt in range(30):
-            if self.click_done(timeout_ms=900):
+        for attempt in range(12):
+            if self.success_message_visible(success_selectors):
+                if self.click_done(timeout_ms=500):
+                    logger.info("Done clicked.")
+                    self.wait_for_share_dialog_closed()
+                    return
+                logger.info("Share confirmation visible; continuing without Done.")
+                return
+            if self.click_done(timeout_ms=500):
                 logger.info("Done clicked.")
                 self.wait_for_share_dialog_closed()
                 return
-            try:
-                if self.page.locator(", ".join(success_selectors)).first.is_visible(timeout=200):
-                    logger.debug("Share confirmation visible on attempt %s", attempt + 1)
-            except Exception:
-                pass
-            self.pause(0.5)
+            if attempt in {4, 8} and self.is_share_screen():
+                logger.warning("Share screen is still visible; clicking Share again.")
+                self.click_share()
+            self.pause(0.4)
 
-        logger.info("Looking for Done button after short wait...")
-        if self.click_done(timeout_ms=5000):
-            logger.info("Done clicked.")
-            self.wait_for_share_dialog_closed()
-            return
-        logger.warning("Done button not found; trying Escape.")
-        self.page.keyboard.press("Escape")
-        self.wait_for_share_dialog_closed()
+        logger.warning("Done button not found after Share; continuing so the next upload can reload Instagram.")
+
+    def success_message_visible(self, selectors: List[str]) -> bool:
+        for selector in selectors:
+            try:
+                if self.page.locator(selector).first.is_visible(timeout=200):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def wait_for_share_dialog_closed(self) -> None:
         done_or_success = (
