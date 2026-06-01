@@ -469,7 +469,7 @@ class InstagramBrowserPoster:
                     self.page.keyboard.press("Tab")
                     self.page.keyboard.press("Enter")
                 logger.info("Share clicked for post %s", post_number)
-                self.finish_share_dialog()
+                self.finish_share_dialog(quick=True)
             else:
                 input("Caption tayyor. Post qilish uchun Instagram oynasida Share bosing, keyin Enter: ")
 
@@ -910,7 +910,7 @@ class InstagramBrowserPoster:
             timeout=30000,
         )
 
-    def finish_share_dialog(self) -> None:
+    def finish_share_dialog(self, quick: bool = False) -> None:
         logger.info("Waiting for share dialog...")
         success_selectors = [
             "text='Your reel has been shared.'",
@@ -920,7 +920,8 @@ class InstagramBrowserPoster:
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
-        for attempt in range(12):
+        max_attempts = 3 if quick else 12
+        for attempt in range(max_attempts):
             if self.success_message_visible(success_selectors):
                 if self.click_done(timeout_ms=500):
                     logger.info("Done clicked.")
@@ -932,12 +933,12 @@ class InstagramBrowserPoster:
                 logger.info("Done clicked.")
                 self.wait_for_share_dialog_closed()
                 return
-            if attempt in {4, 8} and self.is_share_screen():
+            if attempt in {1, 4, 8} and self.is_share_screen():
                 logger.warning("Share screen is still visible; clicking Share again.")
                 self.click_share()
             self.pause(0.4)
 
-        logger.warning("Done button not found after Share; continuing so the next upload can reload Instagram.")
+        logger.warning("Done button not found after Share; continuing after quick submit check.")
 
     def success_message_visible(self, selectors: List[str]) -> bool:
         for selector in selectors:
