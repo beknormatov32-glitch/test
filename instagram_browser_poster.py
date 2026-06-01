@@ -189,6 +189,7 @@ class InstagramBrowserPoster:
         self.posts_today = 0
         self.last_upload_error = ""
         self.last_browser_crash = False
+        self.last_page_text = ""
 
     def pause(self, multiplier: float = 1.0) -> None:
         delay = max(0.0, self.config.action_delay * multiplier)
@@ -251,10 +252,10 @@ class InstagramBrowserPoster:
         return None
 
     def close_browser(self) -> None:
-        if not self.last_browser_crash:
+        if not self.last_browser_crash and not self.last_upload_error:
             self.save_storage_state()
         else:
-            logger.warning("Browser target crashed; skipping storage_state save for this broken session.")
+            logger.warning("Skipping storage_state save after broken upload/session.")
         for item, label in ((self.context, "context"), (self.browser, "browser")):
             if not item:
                 continue
@@ -449,6 +450,7 @@ class InstagramBrowserPoster:
         media_path = self.media_path_for(post_number)
         self.last_upload_error = ""
         self.last_browser_crash = False
+        self.last_page_text = ""
         logger.info("Starting browser upload for post %s: %s", post_number, caption)
         try:
             self.open_create_flow()
@@ -479,6 +481,8 @@ class InstagramBrowserPoster:
         except Exception as exc:
             self.last_upload_error = str(exc)
             self.last_browser_crash = self.is_browser_crash_error(exc)
+            if "Next button not found" in self.last_upload_error and self.last_page_text == "<empty>":
+                self.last_browser_crash = True
             if self.last_browser_crash:
                 logger.error("Browser target crashed for post %s: %s", post_number, exc)
             else:
@@ -495,7 +499,8 @@ class InstagramBrowserPoster:
 
     def click_next(self) -> None:
         if not self.click_text_button(["Next", "Далее", "Дальше"], timeout_ms=15000):
-            logger.error("Visible page text before Next failure: %s", self.visible_page_text())
+            self.last_page_text = self.visible_page_text()
+            logger.error("Visible page text before Next failure: %s", self.last_page_text)
             raise RuntimeError("Next button not found")
         self.pause(0.6)
 
@@ -1230,6 +1235,8 @@ class InstagramBrowserPoster:
         logger.info("Restarting browser session...")
         self.close_browser()
         self.last_browser_crash = False
+        self.last_upload_error = ""
+        self.last_page_text = ""
         self.start_browser()
         self.ensure_login()
 
