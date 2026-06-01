@@ -23,6 +23,7 @@ LOG_FILE = BASE_DIR / "instagram_poster.log"
 PROFILE_DIR = Path(os.getenv("BROWSER_PROFILE_DIR", BASE_DIR / "chrome_profile"))
 DEBUG_DIR = Path(os.getenv("BROWSER_DEBUG_DIR", BASE_DIR / "debug"))
 STORAGE_STATE_PATH = Path(os.getenv("STORAGE_STATE_PATH", BASE_DIR / "storage_state.json"))
+FOREVER_STATE_FILE = Path(os.getenv("FOREVER_STATE_FILE", BASE_DIR / "forever_state.json"))
 STATE_FILE = Path(
     os.getenv(
         "TELEGRAM_STATE_FILE",
@@ -39,6 +40,11 @@ class TelegramPosterBot:
         self.state = self.load_state()
         self.process: Optional[subprocess.Popen] = None
         self.process_output: list[str] = []
+        self.process_args: list[str] = []
+        self.process_chat_id: Optional[int] = None
+        self.auto_restart_enabled = False
+        self.stopping_process = False
+        self.restart_count = 0
 
     def load_state(self) -> dict[str, Any]:
         if STATE_FILE.exists():
@@ -131,6 +137,11 @@ class TelegramPosterBot:
                 self.send(chat_id, self.profile_status())
             elif command == "/session":
                 self.send(chat_id, self.session_status())
+            elif command == "/progress":
+                self.send(chat_id, self.progress_status())
+            elif command == "/resetprogress":
+                FOREVER_STATE_FILE.unlink(missing_ok=True)
+                self.send(chat_id, "Forever progress reset qilindi. Keyingi /forever berilgan start-numberdan boshlaydi.")
             elif command == "/stop":
                 self.stop_process()
                 self.send(chat_id, "Jarayon to'xtatildi.")
@@ -144,8 +155,8 @@ class TelegramPosterBot:
                 self.start_process(chat_id, ["--batch-now", "--start-number", str(start), "--count", str(count), "--delay-seconds", str(delay)])
             elif command == "/forever":
                 start = int(parts[1]) if len(parts) > 1 else 120
-                delay = int(parts[2]) if len(parts) > 2 else 2
-                retry_delay = int(parts[3]) if len(parts) > 3 else 60
+                delay = int(parts[2]) if len(parts) > 2 else 0
+                retry_delay = int(parts[3]) if len(parts) > 3 else 2
                 self.start_process(
                     chat_id,
                     [
@@ -157,7 +168,7 @@ class TelegramPosterBot:
                         "--retry-delay-seconds",
                         str(retry_delay),
                         "--action-delay",
-                        "0.1",
+                        "0.05",
                     ],
                 )
             elif command == "/auto120":
@@ -168,11 +179,11 @@ class TelegramPosterBot:
                         "--start-number",
                         "120",
                         "--delay-seconds",
-                        "2",
+                        "0",
                         "--retry-delay-seconds",
-                        "60",
+                        "2",
                         "--action-delay",
-                        "0.2",
+                        "0.05",
                     ],
                 )
             elif command == "/auto":
@@ -193,8 +204,8 @@ class TelegramPosterBot:
             "/batch 4 47 - 4 dan boshlab 47 ta reel chiqarish\n"
             "/batch 4 47 10 - 10 sekund delay bilan batch\n"
             "/forever 120 - 120dan boshlab to'xtamasdan chiqarish\n"
-            "/forever 120 1 - 1 sekund delay bilan to'xtamasdan chiqarish\n"
-            "/auto120 - 120dan boshlab barqaror tezlikda to'xtamasdan\n"
+            "/forever 120 0 2 - tez rejim: postlar orasida kutmasdan, xatoda 2 sekund retry\n"
+            "/auto120 - 120dan boshlab tez rejimda to'xtamasdan\n"
             "/auto - hozir boshlash, keyin har 29 minut\n"
             "/auto 15 - hozir boshlash, keyin har 15 minut\n"
             "/stop - jarayonni to'xtatish\n"
@@ -202,6 +213,8 @@ class TelegramPosterBot:
             "/debug - oxirgi debug screenshot/html\n"
             "/profile - Chrome profile/session holati\n"
             "/session - storage_state.json holati\n"
+            "/progress - forever davom etish raqami\n"
+            "/resetprogress - forever davom etish raqamini tozalash\n"
             "Chrome profile import: Mac'dagi chrome_profile papkasini zip qilib botga document sifatida yuboring.\n"
             "/whoami - chat id"
         )
@@ -212,6 +225,19 @@ class TelegramPosterBot:
         if self.process:
             return f"To'xtagan. Exit code: {self.process.poll()}\n\n{self.last_output()}"
         return "Hozir aktiv jarayon yo'q."
+
+    def progress_status(self) -> str:
+        if not FOREVER_STATE_FILE.exists():
+            return f"Forever progress hali yo'q: {FOREVER_STATE_FILE}"
+        try:
+            data = json.loads(FOREVER_STATE_FILE.read_text(encoding="utf-8"))
+            return (
+                f"Forever progress: {FOREVER_STATE_FILE}\n"
+                f"Keyingi post: {data.get('next_number', '-')}\n"
+                f"Updated: {data.get('updated_at', '-')}"
+            )
+        except Exception as exc:
+            return f"Forever progress o'qilmadi: {exc}"
 
     def profile_status(self) -> str:
         if not PROFILE_DIR.exists():
@@ -344,18 +370,21 @@ class TelegramPosterBot:
                 child.unlink(missing_ok=True)
         path.rmdir()
 
-    def start_process(self, chat_id: int, args: list[str]) -> None:
-        if self.process and self.process.poll() is None:
-            self.send(chat_id, "Oldingi jarayon hali ishlayapti. Avval /stop bosing.")
-            return
+    def should_auto_restart(self, args: list[str]) -> bool:
+        return any(flag in args for flag in ["--forever", "--start-now", "--batch-now"])
 
-        command = [sys.executable, str(POSTER), *args]
+    def build_command(self, args: list[str]) -> list[str]:
+        command = [sys.executable, "-u", str(POSTER), *args]
         if os.getenv("POSTER_HEADLESS", "").lower() in {"1", "true", "yes"} and "--headless" not in command:
             if not STORAGE_STATE_PATH.exists():
-                self.send(chat_id, self.session_status())
-                return
+                return []
             command.append("--headless")
-        self.process_output = []
+        return command
+
+    def launch_process(self, args: list[str]) -> None:
+        command = self.build_command(args)
+        if not command:
+            raise RuntimeError(self.session_status())
         self.process = subprocess.Popen(
             command,
             cwd=str(BASE_DIR),
@@ -364,23 +393,64 @@ class TelegramPosterBot:
             text=True,
             bufsize=1,
             start_new_session=True,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
+
+    def start_process(self, chat_id: int, args: list[str]) -> None:
+        if self.process and self.process.poll() is None:
+            self.send(chat_id, "Oldingi jarayon hali ishlayapti. Avval /stop bosing.")
+            return
+
+        if not self.build_command(args):
+            self.send(chat_id, self.session_status())
+            return
+        self.process_output = []
+        self.process_args = list(args)
+        self.process_chat_id = chat_id
+        self.auto_restart_enabled = self.should_auto_restart(args)
+        self.stopping_process = False
+        self.restart_count = 0
+        self.launch_process(args)
         threading.Thread(target=self.read_process_output, args=(chat_id,), daemon=True).start()
-        self.send(chat_id, "Jarayon boshlandi:\n" + " ".join(args))
+        restart_text = "\nAuto-restart: yoqilgan" if self.auto_restart_enabled else "\nAuto-restart: o'chirilgan"
+        self.send(chat_id, "Jarayon boshlandi:\n" + " ".join(args) + restart_text)
 
     def read_process_output(self, chat_id: int) -> None:
-        assert self.process and self.process.stdout
-        for line in self.process.stdout:
-            clean = line.rstrip()
-            self.process_output.append(clean)
-            if any(marker in clean for marker in ["Share clicked", "Done clicked", "Batch completed", "Batch stopped", "ERROR", "failed", "Debug saved"]):
-                self.send(chat_id, clean)
-        code = self.process.wait()
-        self.send(chat_id, f"Jarayon tugadi. Exit code: {code}")
+        while True:
+            assert self.process and self.process.stdout
+            current = self.process
+            for line in current.stdout:
+                clean = line.rstrip()
+                self.process_output.append(clean)
+                if any(marker in clean for marker in ["Share clicked", "Done clicked", "Batch completed", "Batch stopped", "ERROR", "failed", "Debug saved"]):
+                    self.send(chat_id, clean)
+            code = current.wait()
+            if self.stopping_process:
+                self.send(chat_id, f"Jarayon to'xtatildi. Exit code: {code}")
+                return
+            if code == 0:
+                self.send(chat_id, f"Jarayon tugadi. Exit code: {code}")
+                return
+            if not self.auto_restart_enabled:
+                self.send(chat_id, f"Jarayon qulab to'xtadi. Exit code: {code}\n/status yoki /logs bilan tekshiring.")
+                return
+
+            self.restart_count += 1
+            delay = min(30, 3 + self.restart_count * 2)
+            self.send(chat_id, f"Jarayon qulab qoldi. Exit code: {code}. {delay} sekunddan keyin avtomatik qayta boshlanadi.")
+            time.sleep(delay)
+            try:
+                self.launch_process(self.process_args)
+                self.send(chat_id, f"Qayta boshlandi. Restart #{self.restart_count}.")
+            except Exception as exc:
+                self.send(chat_id, f"Qayta boshlashda xato: {exc}")
+                return
 
     def stop_process(self) -> None:
         if not self.process or self.process.poll() is not None:
             return
+        self.stopping_process = True
+        self.auto_restart_enabled = False
         try:
             os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
             self.process.wait(timeout=10)

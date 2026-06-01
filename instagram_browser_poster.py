@@ -38,6 +38,9 @@ except ImportError:
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG = BASE_DIR / "config.json"
+FOREVER_STATE_FILE = Path(os.getenv("FOREVER_STATE_FILE", BASE_DIR / "forever_state.json"))
+CRASH_RETRY_DELAY_SECONDS = int(os.getenv("CRASH_RETRY_DELAY_SECONDS", "1"))
+FAST_CREATE_URL = os.getenv("FAST_CREATE_URL", "1").lower() not in {"0", "false", "no"}
 DEFAULT_CHROME_PATHS = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/usr/bin/google-chrome",
@@ -144,6 +147,36 @@ def parse_clock(value: str) -> dt_time:
     return datetime.strptime(value, "%H:%M").time()
 
 
+def read_forever_next_number(default: int) -> int:
+    if not FOREVER_STATE_FILE.exists():
+        return default
+    try:
+        data = json.loads(FOREVER_STATE_FILE.read_text(encoding="utf-8"))
+        next_number = int(data.get("next_number", default))
+        return max(default, next_number)
+    except Exception as exc:
+        logger.warning("Could not read forever state, starting from %s: %s", default, exc)
+        return default
+
+
+def write_forever_next_number(next_number: int) -> None:
+    try:
+        FOREVER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        FOREVER_STATE_FILE.write_text(
+            json.dumps(
+                {
+                    "next_number": next_number,
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("Could not write forever state: %s", exc)
+
+
 class InstagramBrowserPoster:
     def __init__(self, config: BrowserConfig, headless: bool = False):
         self.config = config
@@ -154,6 +187,8 @@ class InstagramBrowserPoster:
         self.page = None
         self.scheduler = BackgroundScheduler(timezone=config.timezone)
         self.posts_today = 0
+        self.last_upload_error = ""
+        self.last_browser_crash = False
 
     def pause(self, multiplier: float = 1.0) -> None:
         delay = max(0.0, self.config.action_delay * multiplier)
@@ -175,7 +210,12 @@ class InstagramBrowserPoster:
         self.playwright = sync_playwright().start()
         launch_options = {
             "headless": self.headless,
-            "args": ["--disable-blink-features=AutomationControlled"],
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-sandbox",
+            ],
         }
         chrome_path = self.find_chrome_path()
         if chrome_path:
@@ -211,7 +251,10 @@ class InstagramBrowserPoster:
         return None
 
     def close_browser(self) -> None:
-        self.save_storage_state()
+        if not self.last_browser_crash:
+            self.save_storage_state()
+        else:
+            logger.warning("Browser target crashed; skipping storage_state save for this broken session.")
         for item, label in ((self.context, "context"), (self.browser, "browser")):
             if not item:
                 continue
@@ -349,6 +392,9 @@ class InstagramBrowserPoster:
         return False
 
     def save_debug_artifacts(self, label: str) -> None:
+        if self.last_browser_crash:
+            logger.warning("Skipping debug artifacts because browser target already crashed.")
+            return
         try:
             self.config.debug_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -360,32 +406,52 @@ class InstagramBrowserPoster:
         except Exception as exc:
             logger.warning("Could not save debug artifacts: %s", exc)
 
+    def is_browser_crash_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        crash_markers = [
+            "target crashed",
+            "browser has been closed",
+            "target page, context or browser has been closed",
+            "browser closed",
+            "page crashed",
+        ]
+        return any(marker in message for marker in crash_markers)
+
+    def open_create_flow(self) -> None:
+        if FAST_CREATE_URL:
+            logger.info("Opening direct create URL.")
+            self.page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=60000)
+            return
+
+        self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
+        logger.info("Looking for Create button...")
+        clicked = self.click_first(
+            [
+                "svg[aria-label='New post']",
+                "svg[aria-label='Создать']",
+                "svg[aria-label='Новая публикация']",
+                "a[aria-label='New post']",
+                "a[aria-label='Create']",
+                "a[href='/create/select/']",
+                "div[role='button']:has-text('Create')",
+                "div[role='button']:has-text('Создать')",
+                "span:has-text('Create')",
+                "span:has-text('Создать')",
+            ],
+            timeout=3000,
+        )
+        if not clicked:
+            logger.info("Create button not found; opening create URL.")
+            self.page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=60000)
+
     def upload_reel(self, post_number: Union[int, str], auto_share: bool = True) -> bool:
         caption = self.create_caption(post_number)
         media_path = self.media_path_for(post_number)
+        self.last_upload_error = ""
+        self.last_browser_crash = False
         logger.info("Starting browser upload for post %s: %s", post_number, caption)
         try:
-            self.page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
-            logger.info("Looking for Create button...")
-            clicked = self.click_first(
-                [
-                    "svg[aria-label='New post']",
-                    "svg[aria-label='Создать']",
-                    "svg[aria-label='Новая публикация']",
-                    "a[aria-label='New post']",
-                    "a[aria-label='Create']",
-                    "a[href='/create/select/']",
-                    "div[role='button']:has-text('Create')",
-                    "div[role='button']:has-text('Создать')",
-                    "span:has-text('Create')",
-                    "span:has-text('Создать')",
-                ],
-                timeout=3000,
-            )
-            if not clicked:
-                logger.info("Create button not found; opening create URL.")
-                self.page.goto("https://www.instagram.com/create/select/", wait_until="domcontentloaded", timeout=60000)
-
+            self.open_create_flow()
             self.set_media_file(media_path)
             logger.info("Media selected: %s", media_path)
 
@@ -411,7 +477,12 @@ class InstagramBrowserPoster:
             self.log_post(post_number, caption, "submitted")
             return True
         except Exception as exc:
-            logger.exception("Browser upload failed for post %s: %s", post_number, exc)
+            self.last_upload_error = str(exc)
+            self.last_browser_crash = self.is_browser_crash_error(exc)
+            if self.last_browser_crash:
+                logger.error("Browser target crashed for post %s: %s", post_number, exc)
+            else:
+                logger.exception("Browser upload failed for post %s: %s", post_number, exc)
             self.save_debug_artifacts(f"upload_failed_{post_number}")
             self.log_post(post_number, caption, "failed")
             return False
@@ -1073,26 +1144,35 @@ class InstagramBrowserPoster:
         self,
         start_number: int = 1,
         delay_seconds: int = 0,
-        retry_delay_seconds: int = 60,
+        retry_delay_seconds: int = 5,
         auto_share: bool = True,
     ) -> bool:
         self.validate()
         self.start_browser()
         try:
             self.ensure_login()
-            number = start_number
-            logger.info("Forever mode started from post %s. Ctrl+C or /stop stops it.", start_number)
+            number = read_forever_next_number(start_number)
+            logger.info("Forever mode started from post %s. Ctrl+C or /stop stops it.", number)
             while True:
-                ok = self.upload_reel(number, auto_share=auto_share)
+                try:
+                    ok = self.upload_reel(number, auto_share=auto_share)
+                except Exception as exc:
+                    logger.exception("Unexpected forever loop error on post %s: %s", number, exc)
+                    ok = False
                 if ok:
                     number += 1
+                    write_forever_next_number(number)
                     if delay_seconds > 0:
                         logger.info("Waiting %s seconds before next post...", delay_seconds)
                         time.sleep(delay_seconds)
                     continue
-                logger.error("Post %s failed. Restarting browser and retrying same number in %s seconds.", number, retry_delay_seconds)
-                self.restart_browser()
-                time.sleep(retry_delay_seconds)
+                wait_seconds = CRASH_RETRY_DELAY_SECONDS if self.last_browser_crash else retry_delay_seconds
+                logger.error("Post %s failed. Restarting browser and retrying same number in %s seconds.", number, wait_seconds)
+                try:
+                    self.restart_browser()
+                except Exception as exc:
+                    logger.exception("Browser restart failed: %s", exc)
+                time.sleep(wait_seconds)
         except KeyboardInterrupt:
             logger.info("Stopped by user.")
             return True
@@ -1102,6 +1182,7 @@ class InstagramBrowserPoster:
     def restart_browser(self) -> None:
         logger.info("Restarting browser session...")
         self.close_browser()
+        self.last_browser_crash = False
         self.start_browser()
         self.ensure_login()
 
@@ -1118,7 +1199,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-number", type=int, default=1, help="First reel number for --batch-now")
     parser.add_argument("--count", type=int, help="How many reels to upload in --batch-now mode")
     parser.add_argument("--delay-seconds", type=int, default=5, help="Delay between reels in --batch-now mode")
-    parser.add_argument("--retry-delay-seconds", type=int, default=60, help="Delay before retrying a failed post in --forever mode")
+    parser.add_argument("--retry-delay-seconds", type=int, default=5, help="Delay before retrying a failed post in --forever mode")
     parser.add_argument("--manual-share", action="store_true", help="Prepare upload and caption, but let you click Share manually")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless after session exists")
     parser.add_argument("--action-delay", type=float, help="Small delay between browser actions. Lower is faster, higher is safer.")
