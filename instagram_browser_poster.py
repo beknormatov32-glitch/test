@@ -457,10 +457,10 @@ class InstagramBrowserPoster:
 
             logger.info("Clicking first Next...")
             self.click_next()
-            logger.info("Clicking second Next...")
-            self.click_next()
+            logger.info("Clicking second Next if Instagram shows it...")
+            self.click_next_if_needed()
             logger.info("Filling caption...")
-            self.fill_caption(caption)
+            self.fill_caption_if_possible(caption)
 
             if auto_share:
                 logger.info("Looking for Share button...")
@@ -498,6 +498,36 @@ class InstagramBrowserPoster:
             logger.error("Visible page text before Next failure: %s", self.visible_page_text())
             raise RuntimeError("Next button not found")
         self.pause(0.6)
+
+    def click_next_if_needed(self) -> None:
+        if self.click_text_button(["Next", "Далее", "Дальше"], timeout_ms=3000):
+            self.pause(0.6)
+            return
+        if self.is_share_screen():
+            logger.info("Next not needed; Instagram is already on the Share screen.")
+            return
+        logger.error("Visible page text before optional Next failure: %s", self.visible_page_text())
+        raise RuntimeError("Next button not found")
+
+    def is_share_screen(self) -> bool:
+        share_selectors = [
+            "div[role='button']:has-text('Share')",
+            "button:has-text('Share')",
+            "text='Share'",
+            "div[role='button']:has-text('Поделиться')",
+            "button:has-text('Поделиться')",
+            "text='Поделиться'",
+            "div[role='button']:has-text('Опубликовать')",
+            "button:has-text('Опубликовать')",
+            "text='Опубликовать'",
+        ]
+        for selector in share_selectors:
+            try:
+                if self.page.locator(selector).last.is_visible(timeout=250):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def visible_page_text(self) -> str:
         try:
@@ -703,6 +733,15 @@ class InstagramBrowserPoster:
                 return
         logger.error("Visible page text before caption failure: %s", self.visible_page_text())
         raise RuntimeError("Caption field not found")
+
+    def fill_caption_if_possible(self, caption: str) -> None:
+        try:
+            self.fill_caption(caption)
+        except Exception:
+            if self.is_share_screen():
+                logger.warning("Caption field not found, but Share screen is ready; continuing without caption.")
+                return
+            raise
 
     def try_fill_caption(self, caption: str, selectors: List[str]) -> bool:
         for selector in selectors:
