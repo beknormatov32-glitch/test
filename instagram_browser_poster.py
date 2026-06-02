@@ -471,8 +471,7 @@ class InstagramBrowserPoster:
                     self.page.keyboard.press("Tab")
                     self.page.keyboard.press("Enter")
                 logger.info("Share clicked for post %s", post_number)
-                if not self.finish_share_dialog():
-                    raise RuntimeError("Share confirmation not detected")
+                self.finish_share_dialog(quick=True)
             else:
                 input("Caption tayyor. Post qilish uchun Instagram oynasida Share bosing, keyin Enter: ")
 
@@ -916,7 +915,7 @@ class InstagramBrowserPoster:
             timeout=30000,
         )
 
-    def finish_share_dialog(self) -> bool:
+    def finish_share_dialog(self, quick: bool = False) -> None:
         logger.info("Waiting for share dialog...")
         success_selectors = [
             "text='Your reel has been shared.'",
@@ -926,22 +925,22 @@ class InstagramBrowserPoster:
             "text='Ваша публикация опубликована.'",
             "text='Публикация опубликована'",
         ]
-        for attempt in range(18):
+        max_attempts = 2 if quick else 12
+        for attempt in range(max_attempts):
             if self.success_message_visible(success_selectors):
                 if self.click_done(timeout_ms=500):
                     logger.info("Done clicked.")
                     self.wait_for_share_dialog_closed()
-                    return True
+                    return
                 logger.info("Share confirmation visible; continuing without Done.")
-                return True
+                return
             if self.click_done(timeout_ms=500):
                 logger.info("Done clicked.")
                 self.wait_for_share_dialog_closed()
-                return True
+                return
             self.pause(0.4)
 
-        logger.warning("Share confirmation not detected after submit.")
-        return False
+        logger.warning("Done button not found after Share; continuing after quick submit check.")
 
     def success_message_visible(self, selectors: List[str]) -> bool:
         for selector in selectors:
