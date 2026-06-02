@@ -422,7 +422,7 @@ class TelegramPosterBot:
             for line in current.stdout:
                 clean = line.rstrip()
                 self.process_output.append(clean)
-                if any(marker in clean for marker in ["Share clicked", "Done clicked", "Share confirmation", "Batch completed", "Batch stopped", "ERROR", "failed", "Debug saved"]):
+                if any(marker in clean for marker in ["Share clicked", "Done clicked", "Batch completed", "Batch stopped", "ERROR", "failed", "Debug saved"]):
                     self.send(chat_id, clean)
             code = current.wait()
             if self.stopping_process:

@@ -932,8 +932,8 @@ class InstagramBrowserPoster:
                     logger.info("Done clicked.")
                     self.wait_for_share_dialog_closed()
                     return True
-                logger.warning("Share confirmation visible but Done button was not clicked; retrying same post.")
-                return False
+                logger.info("Share confirmation visible; continuing without Done.")
+                return True
             if self.click_done(timeout_ms=500):
                 logger.info("Done clicked.")
                 self.wait_for_share_dialog_closed()
